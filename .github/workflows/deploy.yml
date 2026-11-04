@@ -1,0 +1,46 @@
+name: Deploy generated app
+run-name: Deploy ${{ inputs.approved_sha }}
+'on':
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Exact published commit approved in Forge
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    uses: ./.github/workflows/app-ci.yml
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main' && github.sha == inputs.approved_sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24'
+      - name: Check deployment configuration
+        run: test -n "$VERCEL_TOKEN" && test -n "$VERCEL_ORG_ID" && test -n "$VERCEL_PROJECT_ID"
+      - name: Pull production settings
+        run: npx --yes vercel@65.9.0 pull --yes --environment=production --token="$VERCEL_TOKEN"
+      - name: Build deployment output
+        run: npx --yes vercel@65.9.0 build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy approved application
+        run: |
+          npx --yes vercel@65.9.0 deploy --prebuilt --prod --token="$VERCEL_TOKEN" > deployment-url.txt
+          node -e "const fs=require('fs');const url=fs.readFileSync('deployment-url.txt','utf8').trim();if(!/^https:\/\/[a-zA-Z0-9.-]+\.vercel\.app$/.test(url))throw Error('Unexpected deployment URL');fs.writeFileSync('deployment.json',JSON.stringify({url,sha:process.env.GITHUB_SHA}))"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: deployment
+          path: deployment.json
+          retention-days: 7
